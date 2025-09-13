@@ -1,5 +1,5 @@
 {
-  "name": "BLEストップウォッチ",
+  "name": "BLE",
   "short_name": "BLEストップウォッチ",
   "description": "BLEとGPSに対応したストップウォッチアプリ",
   "start_url": "/index.html",

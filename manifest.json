@@ -1,6 +1,6 @@
 {
-  "name": "BLE ストップウォッチ",
-  "short_name": "BLE_SW",
+  "name": "Dorrobor_by_クボファク",
+  "short_name": "Dorrobor_ver2",
   "description": "BLEとGPSに対応したラップタイマーアプリです。",
   "start_url": "/index.html",
   "display": "fullscreen",
@@ -19,4 +19,5 @@
       "type": "image/png"
     }
   ]
+
 }

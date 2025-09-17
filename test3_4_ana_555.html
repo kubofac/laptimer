@@ -110,8 +110,8 @@ let swState = SW_STATE.STOP;
 let startTime = 0;
 let lapRecords = [];
 let lapCount = 0;
-let countUpTimerId; // requestAnimationFrameのID
-let lapTimerId;     // requestAnimationFrameのID
+let countUpTimerId;
+let lapTimerId;
 let lapStartTime = 0;
 let port;
 let reader;
@@ -123,6 +123,8 @@ let pulseCharacteristic, tempCharacteristic, switchCharacteristic;
 let lastSwitchState = 0;
 const switchDebounceDelay = 100;
 let lastSwitchChangeTime = 0;
+let pulseTimeoutId; // パルス途絶を検知するためのタイマーID
+const PULSE_TIMEOUT_MS = 500; // パルスが途絶えたと判定する時間（ミリ秒）
 
 // --- GPS関連のグローバル変数 ---
 let connectedDeviceName;
@@ -167,6 +169,10 @@ const bluetoothConnect = async () => {
         await switchCharacteristic.startNotifications();
         debugInfo.textContent = '● 接続完了';
         console.log('接続完了。データ受信を開始します。');
+        
+        // 接続成功時にタコメーターを初期化
+        drawTachometer(0);
+        
     } catch (error) {
         console.error("BLE接続エラー:", error);
         debugInfo.innerHTML = `接続エラー: ${error.message}`;
@@ -185,6 +191,10 @@ const bluetoothDisconnect = async () => {
             await bleDevice.gatt.disconnect();
             debugInfo.textContent = 'disconnect';
             console.log('BLE切断完了。');
+            
+            // 切断時にタコメーターを0に戻す
+            drawTachometer(0);
+            
         } catch (error) {
             console.error("切断エラー:", error);
             debugInfo.innerHTML = `error: ${error.message}`;
@@ -194,22 +204,19 @@ const bluetoothDisconnect = async () => {
     }
 };
 
-function handlePulseChanged(event) {
-    const value = event.target.value;
-    const fqv = value.getUint16(0, true);
-    const rev = fqv * 60 / pl;
-    let rpm = ((rev / 10) * 10);
-    if (rpm > 15000) { rpm = 0; }
-    const anglea = rpm * 0.016;
-    const rpma = Math.round(rpm);
-    const s1 = String(rpma);
+// タコメーターを描画する関数を分離
+function drawTachometer(rpm) {
     const canvas = document.getElementById('canvas');
+    if (!canvas) return;
     const ctx = canvas.getContext('2d');
     canvas.height = window.innerHeight;
     canvas.width = window.innerWidth;
     const sizea = 340;
     const sizeb = 340;
+    const anglea = rpm * 0.016;
     const endAngle = anglea * Math.PI / 180;
+    const s1 = String(Math.round(rpm));
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = "#000000";
     ctx.font = "bold 45px Arial";
@@ -223,6 +230,26 @@ function handlePulseChanged(event) {
     ctx.strokeStyle = "#ff0000";
     ctx.lineWidth = 5;
     ctx.stroke();
+}
+
+function handlePulseChanged(event) {
+    // パルスが来たら、既存のタイマーをリセット
+    clearTimeout(pulseTimeoutId);
+
+    const value = event.target.value;
+    const fqv = value.getUint16(0, true);
+    
+    // plが0または未定義の場合は計算をスキップし、RPMを0とする
+    const rev = (pl && pl !== 0) ? (fqv * 60 / pl) : 0;
+    let rpm = ((rev / 10) * 10);
+    if (rpm > 15000) { rpm = 0; }
+    
+    drawTachometer(rpm);
+
+    // 一定時間パルスが来なければ0に戻すタイマーを設定
+    pulseTimeoutId = setTimeout(() => {
+        drawTachometer(0);
+    }, PULSE_TIMEOUT_MS);
 }
 
 function handleTempChanged(event) {
@@ -258,7 +285,6 @@ const setStorage = () => {
 };
 const clearStorage = () => { localStorage.removeItem(storageName); };
 
-// 修正：setIntervalからrequestAnimationFrameへ
 const countUp = () => {
     countUpTimerId = requestAnimationFrame(() => {
         if (startTime === 0) startTime = Date.now();
@@ -269,7 +295,6 @@ const countUp = () => {
     });
 };
 
-// 修正：setIntervalからrequestAnimationFrameへ
 const startRealtimeLap = () => {
     if (swState === SW_STATE.RUN) {
         lapTimerId = requestAnimationFrame(() => {
@@ -322,7 +347,6 @@ const clickStartSW = () => {
         }
     } else if (swState === SW_STATE.RUN) {
         swState = SW_STATE.PAUSE;
-        // 修正：clearTimeoutからcancelAnimationFrameへ
         cancelAnimationFrame(countUpTimerId);
         cancelAnimationFrame(lapTimerId);
         clearTimeout(lapFixedDisplayTimeoutId);
@@ -349,13 +373,11 @@ const clickLapResetSW = () => {
         lapTimePrint(lapDuration);
         lastLapTime = now;
         lapStartTime = now;
-        // 修正：clearTimeoutからcancelAnimationFrameへ
         cancelAnimationFrame(lapTimerId);
         startRealtimeLap();
 
     } else if (swState === SW_STATE.PAUSE) {
         swState = SW_STATE.STOP; startTime = 0; lapRecords = []; lapCount = 0;
-        // 修正：clearTimeoutからcancelAnimationFrameへ
         cancelAnimationFrame(countUpTimerId);
         cancelAnimationFrame(lapTimerId);
         clearTimeout(lapFixedDisplayTimeoutId);
@@ -363,8 +385,7 @@ const clickLapResetSW = () => {
         if (elem.lap) elem.lap.innerHTML = ''; if (elem.display1) elem.display1.textContent = '00:00.000';
         if (startButton) startButton.textContent = 'start'; if (resetButton) resetButton.textContent = 'reset';
         
-        // ローカルストレージのクリアを修正
-        localStorage.removeItem(storageName); // ストップウォッチの状態だけを削除
+        localStorage.removeItem(storageName);
         
         stopGps();
         lastPosition = null;
@@ -485,13 +506,11 @@ function test2(position) {
     const timeSinceLastLap = currentTime - lastLapTime;
     const isCoolDownOver = (lapCount === 0) || (timeSinceLastLap >= lapCoolDown);
 
-    // ライン交差判定、クールダウン、閾値距離内の3つの条件が満たされた場合のみラップを検知
     if (isCrossingLine && isCoolDownOver && isNearStartLine) {
         const estimatedCrossingTime = getIntersectionTime(lastPosition, { latitude: currentLat, longitude: currentLon, time: currentTime }, idd, keii, iddd, keiii);
         
         let lapTimeBase;
 
-        // 予測時間が有効な範囲内かチェック（10秒以内の誤差を許容）
         if (estimatedCrossingTime && (Math.abs(estimatedCrossingTime - currentTime) < 10000)) { 
             lapTimeBase = estimatedCrossingTime;
             console.log("予測時間を使用");
@@ -504,7 +523,6 @@ function test2(position) {
         const lapDuration = lapTimeBase - lastLapTime;
         lapTimePrint(lapDuration, 'gps');
         
-        // リアルタイムラップ表示を一時停止
         cancelAnimationFrame(lapTimerId);
         if (lapFixedDisplayTimeoutId) {
             clearTimeout(lapFixedDisplayTimeoutId);
@@ -513,13 +531,12 @@ function test2(position) {
             elem.display1.textContent = timeToString(lapDuration);
         }
 
-        // 10秒後にリアルタイムラップ表示を再開するタイマーを設定
         lapFixedDisplayTimeoutId = setTimeout(() => {
             if (swState === SW_STATE.RUN) {
                 lapStartTime = lapTimeBase;
                 startRealtimeLap();
             }
-        }, 10000); // 10秒
+        }, 10000);
         
         lastLapTime = lapTimeBase;
         console.log(`ラップ ${lapCount} をトリガーしました！推定通過時刻: ${new Date(lapTimeBase).toISOString()}`);
@@ -557,6 +574,9 @@ window.addEventListener('DOMContentLoaded', function () {
 
     timePrint(0);
     if (elem.display1) elem.display1.textContent = '00:00.000';
+    
+    // 初期表示でタコメーターを0に設定
+    drawTachometer(0);
 
     const storage = getStorage();
     if (Object.keys(storage).length > 0) {
@@ -583,4 +603,3 @@ window.addEventListener('DOMContentLoaded', function () {
 </script>
 </body>
 </html>
-
